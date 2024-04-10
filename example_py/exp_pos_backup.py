@@ -55,15 +55,15 @@ if __name__ == '__main__':
         udp.GetRecv(state)
         
         if( motiontime >= 0):
-
+            #print(motiontime)
             # first, get record initial position
             if( motiontime >= 0 and motiontime < 10):
                 qInit[0] = state.motorState[d['FR_0']].q
                 qInit[1] = state.motorState[d['FR_1']].q
                 qInit[2] = state.motorState[d['FR_2']].q
-            # print(state.motorState[d['FR_0']].q)
-            print(state.imu.rpy)
             
+            if (motiontime % 100 == 0):
+                print(state.motorState[d['RL_0']].q, state.motorState[d['RL_1']].q, state.motorState[d['RL_2']].q)
             # second, move to the origin point of a sine movement with Kp Kd
             if( motiontime >= 10 and motiontime < 400):
                 rate_count += 1
@@ -88,8 +88,9 @@ if __name__ == '__main__':
                 # sin_joint2 = -0.9 * sin(3*M_PI*sin_count/1000.0)
                 sin_joint1 = 0.6 * math.sin(t*freq_rad)
                 sin_joint2 = -0.9 * math.sin(t*freq_rad)
-                qDes[0] = sin_mid_q[0]
-                qDes[1] = sin_mid_q[1] + sin_joint1
+                qDes[0] = sin_mid_q[0] + sin_joint1
+                # qDes[1] = sin_mid_q[1] + sin_joint1
+                qDes[1] = sin_mid_q[1]
                 qDes[2] = sin_mid_q[2] + sin_joint2
             
 
