@@ -139,13 +139,14 @@ def construct_from_state(state, command):
     
 
     contact = torch.as_tensor([[state.footForce[0], state.footForce[1], state.footForce[2], state.footForce[3]]]).cuda()
-    return base_ang_vel, imu_obs, comm, dof_pos, dof_vel, contact, dof_torque #torch.cat((),axis = -1)
+    contact_filt = (contact > 300).float() - 0.5
+    return base_ang_vel, imu_obs, comm, dof_pos, dof_vel, contact_filt, dof_torque #torch.cat((),axis = -1)
 
 def print_test_msg(info_dict):
     print("-"*25 + " step = "+str(motiontime) + " " + "-"*25)
     for key, value in info_dict.items():
         if isinstance(value, list):
-            print(key, ["{:.4f}".format(val) for val in value])
+            print(key, "\t".join(["{:.4f}".format(val) for val in value]))
         else:
             print(key, "{:.4f}".format(value))
 
@@ -191,16 +192,16 @@ if __name__ == '__main__':
     steps = 250
     motiontime, cur_angles = init_standup(cmd, udp, safe, state, steps = steps)
 
-    # Kp = [[20] * 3 for _ in range(4)]
-    # Kd = [[0.5] * 3 for _ in range(4)]
-    # # [FL, FR, RL, RR] [hip, thigh, calf]
-    # tau = [[15] * 3 for _ in range(4)] # scale 
-
-
-    Kp = [[0] * 3 for _ in range(4)]
-    Kd = [[0] * 3 for _ in range(4)]
+    Kp = [[30] * 3 for _ in range(4)]
+    Kd = [[0.8] * 3 for _ in range(4)]
     # [FL, FR, RL, RR] [hip, thigh, calf]
-    tau = [[0] * 3 for _ in range(4)] # scale 
+    tau = [[15] * 3 for _ in range(4)] # scale 
+
+
+    # Kp = [[0] * 3 for _ in range(4)]
+    # Kd = [[0] * 3 for _ in range(4)]
+    # # [FL, FR, RL, RR] [hip, thigh, calf]
+    # tau = [[0] * 3 for _ in range(4)] # scale 
 
 
     # action torque tau
@@ -208,7 +209,7 @@ if __name__ == '__main__':
 
     qDes0, qDes1, qDes2, qDes3 = default_angles[0], default_angles[1], default_angles[2], default_angles[3]
     last_actions = torch.zeros((1, 12)).cuda()
-
+    
 
     highCmd.mode = 0      # 0:idle, default stand      1:forced stand     2:walk continuously
     highCmd.gaitType = 0
@@ -222,7 +223,7 @@ if __name__ == '__main__':
 
     # for i in range(num_steps):
     while True:
-        time.sleep(0.002)
+        time.sleep(0.01)
         motiontime += 1
         # print(state.imu.rpy[0])
         
@@ -231,16 +232,27 @@ if __name__ == '__main__':
         udp_h.Recv() 
         udp_h.GetRecv(highState)  
 
-        command = env.commands[:, :3]
+        # command = env.commands[:, :3]
+        #self define command
+        command = torch.tensor([0.5, 0.0, 0.0]).cuda()
+        command = command[None,:]
         
         
-
-        base_ang_vel, imu_obs, comm, dof_pos, dof_vel, contact, dof_torque = construct_from_state(state, command)
-
+        # observation from real robot
+        base_ang_vel, imu_obs, comm, dof_pos, dof_vel, contact_filt, dof_torque = construct_from_state(state, command)
         height = torch.ones((1, 1)).cuda() * 0.25
-        oo = torch.cat((base_ang_vel, imu_obs, comm, dof_pos, dof_vel, last_actions, contact, height),axis = -1)
+        oo = torch.cat((base_ang_vel, imu_obs, comm, dof_pos, dof_vel, last_actions, contact_filt, height),axis = -1)
+
+        # what if we blend in simulated env feedback
+        obs, _, rews, dones, infos = env.step(last_actions.detach()) 
+        dof_pos = obs[:, 8:20]
+        dof_vel = obs[:, 20:32]
+        oo = torch.cat((base_ang_vel, imu_obs, comm, dof_pos, dof_vel, last_actions, contact_filt, height),axis = -1)
 
         actions = rn_policy(oo.cuda())
+
+
+        
 
         actions_arr = actions.cpu().detach().numpy().reshape(-1, 3)
 
@@ -271,10 +283,26 @@ if __name__ == '__main__':
                         'base_vel_roll': state.imu.rpy[0],
                         'base_vel_pitch': state.imu.rpy[1],
                         'base_vel_yaw': state.imu.rpy[2],
-                        'contact_forces_z': [contact[0,i].item() for i in range(len(contact[0]))],
+                        'contact_forces_z': [contact_filt[0,i].item() for i in range(len(contact_filt[0]))],
                         
             }
-        print_test_msg(info_dict)
+        
+        
+        info_that_matters_dict = {
+
+                                # 'dof_pos_target': actions[0, joint_index].item() * env.cfg.control.action_scale,
+                        'base_ang_vel': [base_ang_vel[0, i] for i in range(len(base_ang_vel[0]))],
+                        'imu_obs': [state.imu.rpy[0], state.imu.rpy[1]],
+                        'commands': [comm[0,i] for i in range(len(comm[0]))],
+                        'dof_pos': [dof_pos[0, i].item() for i in range(len(dof_pos[0]))],
+                        'dof_torque': [dof_torque[0, i].item() for i in range(len(dof_torque[0]))],
+                        'dof_vel': [dof_vel[0, i].item() for i in range(len(dof_vel[0]))],
+                        'actions': [actions[0, i].item() for i in range(len(actions[0]))],
+                        'contact_filt': [contact_filt[0,i].item() for i in range(len(contact_filt[0]))],
+                        'height': height[0,0].item(),
+                        'base_pos_z': highState.position[2],
+        }
+        print_test_msg(info_that_matters_dict)
 
         # if i < stop_state_log:
         #     logger.log_states(info_dict
@@ -285,7 +313,7 @@ if __name__ == '__main__':
 
         udp.SetSend(cmd)
         udp.Send()
-        udp_h.SetSend(highCmd)
-        udp_h.Send()
+        # udp_h.SetSend(highCmd)
+        # udp_h.Send()
     
     print("Done")
